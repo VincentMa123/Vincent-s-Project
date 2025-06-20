@@ -5,7 +5,6 @@ This project investigates how spectral envelope cues—specifically the number o
 
 ## Key Components
 - **Data**  
-  - `data_*.mat` — raw reference and surveillance signals for passive radar demonstration  
   - `C_01_02.wav` — example clean speech file
 ## Usage
 **Prerequisites**  
