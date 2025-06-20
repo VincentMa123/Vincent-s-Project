@@ -1,0 +1,143 @@
+clear;clc
+load data_1.mat
+%raw
+figure;
+%plot_time_domain(seq_ref, f_s)
+figure;
+%plot_frequency_domain(seq_ref, f_s)
+
+%DDC
+seq_ref_DDC = DDC(seq_ref, f_s);
+seq_sur_DDC = DDC(seq_sur, f_s);
+figure; 
+%plot_frequency_domain(seq_ref_DDC, f_s)
+
+%LPF filter
+seq_ref_LPF = LPF(seq_ref_DDC, f_s);
+seq_sur_LPF = LPF(seq_sur_DDC, f_s);
+figure;
+%plot_frequency_domain(seq_ref_LPF, f_s);
+
+figure;
+plot_range_doppler(seq_ref_LPF, seq_sur_LPF, f_s, cur_time, 0.5);
+
+function plot_time_domain(sig, fs)
+    Ts = 1/fs;
+    t = (0:length(sig)-1)*Ts*1e3;
+    plot (t, real(sig)), xlim([0, 10]), ylim([-4*1e-3, 4*1e-3]);
+    xlabel("Time (ms)"), ylabel("Amplitude");
+end
+
+function plot_frequency_domain(sig, fs)
+    X_sig = fftshift(fft(sig)/fs);
+    wstep = 2*pi/length(sig)*fs;
+    w = ((0:length(sig)-1) - length(sig)/2)*wstep;
+    f = w/(2*pi);
+    plot(f/1e6, 20*log10(abs(X_sig)));
+    xlabel("Frequency (MHz)"), ylabel("Amplitude (dB)");
+end
+
+function result = DDC(sig, fs)
+    f_ddc = -3e6;
+    t = (0:length(sig)-1)/fs;
+    result = sig.*exp(-1j*2*pi*f_ddc*t);
+end
+
+function result = LPF(sig, fs)
+    LPF_cutoff = 9e6;
+    [b, a] = butter(20, LPF_cutoff/(fs/2));
+    result = filter(b, a, sig);
+end
+
+function plot_range_doppler(seq_ref, seq_sur, f_s, cur_time, duration)
+    fd = -40:2:40;  % Doppler frequency sampling points
+
+    range = [0, 12, 24, 36, 48, 60, 72];
+    tau_list = range./3e8; 
+
+    % Window
+    Ts = 1/f_s;
+    window = linspace(0, duration, 6);
+    window = window(1:end-1);  
+    timeToPoint = @(T) floor(T / Ts + 1);
+ 
+    corTs = zeros(5, 7, 41);  
+    corMap = zeros(7, 41);
+    
+    % Add padding to signals 
+    ref = [seq_ref, zeros(1, 7)];
+    sur = [seq_sur, zeros(1, 7)];
+    
+    for idx = 1:5
+        t0 = window(idx);
+        
+        for tau_idx = 1:length(tau_list)
+            for fd_idx = 1:length(fd)
+                T = duration/5;
+                N1 = timeToPoint(t0);
+                N2 = timeToPoint(t0 + T);
+                C = floor(timeToPoint(tau_list(tau_idx))) - 1;
+                t = linspace(t0, t0 + T, N2 - N1 + 1);
+
+                % Extract signal segments
+                y_ref = ref(max(1, N1):min(length(ref), N2));
+      
+                sur_indices = (N1:N2) + C;
+                valid_mask = (sur_indices >= 1) & (sur_indices <= length(sur));
+                
+                y_sur = zeros(size(y_ref));
+                if any(valid_mask)
+                    valid_indices = sur_indices(valid_mask);
+                    y_sur(valid_mask) = sur(valid_indices);
+                end
+                y = y_sur .* conj(y_ref) .* exp(-1j*2*pi*fd(fd_idx)*t);
+                y_trap = (y + circshift(y, 1)) / 2;
+                y_trap = y_trap(2:end);
+                result_trap = sum(y_trap) * Ts;
+                corTs(idx, tau_idx, fd_idx) = result_trap;
+                corMap(tau_idx, fd_idx) = corMap(tau_idx, fd_idx) + corTs(idx, tau_idx, fd_idx);
+            end
+        end
+    end
+    
+    corMap = abs(corMap);
+    corMap_max = max(corMap(:));
+
+    % Find peak location
+    [R_idx, fd_idx] = find(corMap == corMap_max, 1);
+    if ~isempty(R_idx)
+        R_peak = range(R_idx);
+        D_peak = fd(fd_idx);
+    else
+        R_peak = 0;
+        D_peak = 0;
+    end
+    
+    corMap_normalized = corMap ./ corMap_max;
+    
+    % Apply floor to avoid -Inf in log
+    floor_value = 1e-3;  % -30 dB floor
+    corMap_normalized(corMap_normalized < floor_value) = floor_value;
+    
+    corMap_dB = 20*log10(corMap_normalized);
+    
+    [F, R] = meshgrid(fd, range);
+    
+    figure;
+    surf(F, R, corMap_dB);
+    view(0, 90); 
+    colorbar;
+    caxis([-10, 0]);  
+    xlim([fd(1), fd(end)]);
+    xlabel('Doppler Frequency (Hz)');
+    ylim([range(1), range(end)]);
+    ylabel('Range (m)');
+   
+    set(gca, 'YTick', range);
+    set(gca, 'YTickLabel', num2str(range'));
+    
+    title(sprintf('Range-Doppler Spectrum [ %.1fs: %.0fm, %.0fHz ]', cur_time, R_peak, D_peak));
+    
+    fprintf('Peak detected at: Range = %.1fm, Doppler = %.1fHz\n', R_peak, D_peak);
+    
+end
